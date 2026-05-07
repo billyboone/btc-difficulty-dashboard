@@ -74,10 +74,14 @@ function formatSI(n) {
 function formatPct(p) {
   if (!isFinite(p)) return "—";
   const sign = p > 0 ? "+" : "";
-  if (Math.abs(p) >= 1000) return sign + Math.round(p).toLocaleString() + "%";
-  if (Math.abs(p) >= 10)   return sign + p.toFixed(1) + "%";
-  return sign + p.toFixed(2) + "%";
+  return sign + Math.round(p).toLocaleString() + "%";
 }
+
+// Font stacks chosen to render correctly both in the live HTML and in the
+// standalone SVG → PNG export pipeline (where Tailwind's web fonts aren't
+// available, so we need fallbacks present on every OS).
+const FONT_SANS = "Inter, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif";
+const FONT_MONO = "Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
 function formatDate(d) {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
@@ -403,11 +407,11 @@ function App() {
       // title block
       ctx.textBaseline = "top";
       ctx.fillStyle = "#0a0a0a";
-      ctx.font = "600 38px -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif";
+      ctx.font = "600 38px " + FONT_SANS;
       ctx.fillText("Difficulty Growth by Epoch", 36, 30);
 
       ctx.fillStyle = "#6b7280";
-      ctx.font = "400 17px -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif";
+      ctx.font = "400 17px " + FONT_SANS;
       ctx.fillText("Bitcoin mining difficulty, converted to estimated hashes required per block.", 36, 78);
 
       // chart
@@ -425,20 +429,20 @@ function App() {
       ctx.arc(54, fy, 14, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#ffffff";
-      ctx.font = "700 14px -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+      ctx.font = "700 14px " + FONT_SANS;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText("𝕏", 54, fy + 1);
 
       ctx.fillStyle = "#374151";
-      ctx.font = "600 16px -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif";
+      ctx.font = "600 16px " + FONT_SANS;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.fillText("@thebillyboone", 78, fy);
 
       // source + date (right)
       ctx.fillStyle = "#9ca3af";
-      ctx.font = "400 13px ui-monospace, Menlo, Monaco, monospace";
+      ctx.font = "400 13px " + FONT_MONO;
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
       const stamp = "Source: " + (source || "—") + "  ·  " + new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -570,7 +574,7 @@ function App() {
                     <line x1={margin.left} x2={W - margin.right} y1={yScale(t)} y2={yScale(t)}
                       stroke="rgba(0,0,0,0.05)" strokeWidth="1"/>
                     <text x={margin.left - 8} y={yScale(t) + 3} textAnchor="end"
-                      fontSize={isMobile ? "9.5" : "10.5"} fill="#6b7280" fontFamily="ui-monospace, monospace">
+                      fontSize={isMobile ? "9.5" : "10.5"} fill="#6b7280" fontFamily={FONT_MONO}>
                       {formatSI(t)}
                     </text>
                   </g>
@@ -583,7 +587,7 @@ function App() {
                       <line x1={x} x2={x} y1={margin.top} y2={margin.top + innerH}
                         stroke="rgba(0,0,0,0.04)"/>
                       <text x={x} y={margin.top + innerH + 16} textAnchor="middle"
-                        fontSize={isMobile ? "9.5" : "10.5"} fill="#6b7280" fontFamily="ui-monospace, monospace">
+                        fontSize={isMobile ? "9.5" : "10.5"} fill="#6b7280" fontFamily={FONT_MONO}>
                         {t.getFullYear()}
                       </text>
                     </g>
@@ -599,7 +603,7 @@ function App() {
                   <text x={20} y={margin.top + innerH/2}
                     transform={"rotate(-90, 20, " + (margin.top + innerH/2) + ")"}
                     textAnchor="middle" fontSize="10" fill="#9ca3af"
-                    fontFamily="ui-monospace, monospace" letterSpacing="2">
+                    fontFamily={FONT_MONO} letterSpacing="2">
                     {yLabel.toUpperCase()}
                   </text>
                 )}
@@ -634,12 +638,12 @@ function App() {
                   return (
                     <g key={"label-" + ep.id} pointerEvents="none">
                       <text x={cx} y={cy} textAnchor="middle" fontSize={big}
-                        fontWeight="700" fill={ep.text}
+                        fontWeight="700" fill={ep.text} fontFamily={FONT_SANS}
                         style={{letterSpacing: "-0.025em"}}>
                         {formatPct(ep.pct)}
                       </text>
                       <text x={cx} y={cy + big * 0.95 + 4} textAnchor="middle" fontSize={meta}
-                        fontWeight="500" fill="#6b7280" fontFamily="ui-monospace, monospace"
+                        fontWeight="500" fill="#6b7280" fontFamily={FONT_MONO}
                         style={{letterSpacing: "0.04em"}}>
                         {metaText}
                       </text>
