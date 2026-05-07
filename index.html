@@ -632,7 +632,11 @@ function App() {
                     ? (w > 140 ? 17 : w > 80 ? 13 : 11)
                     : (w > 240 ? 22 : w > 160 ? 19 : w > 90 ? 15 : 12);
                   const meta = isMobile ? (w > 140 ? 10 : 9) : (w > 160 ? 11 : 10);
-                  const metaText = w > 90
+                  // On mobile keep all labels in short form (E2/E3/E4/E5) so
+                  // the row reads consistently — otherwise a single wide
+                  // epoch ends up showing "Epoch 4 · 2020–2024" while its
+                  // narrower neighbors stay abbreviated.
+                  const metaText = (!isMobile && w > 90)
                     ? "Epoch " + ep.id + " · " + ep.label
                     : "E" + ep.id;
                   return (
