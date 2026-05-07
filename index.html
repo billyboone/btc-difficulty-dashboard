@@ -13,7 +13,6 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 <style>
   html, body { background: #ffffff; }
   body {
@@ -170,6 +169,7 @@ function App() {
   const [exportingPng, setExportingPng] = useState(false);
   const containerRef = useRef(null);
   const cardRef = useRef(null);
+  const svgRef = useRef(null);
   const [size, setSize] = useState({ w: 1100, h: 560 });
 
   const loadData = useCallback(async () => {
@@ -343,20 +343,114 @@ function App() {
   const onTouchMove  = (e) => { if (e.touches[0]) moveHover(e.touches[0].clientX, e.currentTarget); };
   const onTouchEnd   = () => setHover(null);
 
+  // Renders the chart SVG directly to a canvas at a fixed export size, then
+  // composites the title, subtitle, and credit row on top in pure canvas2d.
+  // This bypasses html2canvas's flaky SVG handling (which was clipping the
+  // live epoch on the right edge) and gives a deterministic 1600×900 PNG
+  // sized for X.
   const downloadPNG = async () => {
-    if (!cardRef.current || !window.html2canvas || exportingPng) return;
+    if (!svgRef.current || exportingPng) return;
     setExportingPng(true);
+    setHover(null);
     try {
-      const canvas = await window.html2canvas(cardRef.current, {
-        backgroundColor: "#ffffff", scale: 2, logging: false, useCORS: true
+      // Build a clone of the SVG sized to the export width so the chart's
+      // internal coordinates match the output canvas exactly — no scaling
+      // distortion, no clipped epochs.
+      const EXPORT_W = 1600;
+      const HEADER_H = 110;
+      const FOOTER_H = 64;
+      const CHART_H = 720;
+      const EXPORT_H = HEADER_H + CHART_H + FOOTER_H;
+
+      // Re-render the SVG content at export dimensions by cloning the live
+      // node and rewriting width/height + viewBox. Two RAFs let React flush
+      // any pending re-render so the clone reflects the current state.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      const live = svgRef.current;
+      const liveW = parseFloat(live.getAttribute("width"));
+      const liveH = parseFloat(live.getAttribute("height"));
+      const clone = live.cloneNode(true);
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+      clone.setAttribute("width", EXPORT_W);
+      clone.setAttribute("height", CHART_H);
+      clone.setAttribute("viewBox", "0 0 " + liveW + " " + liveH);
+      clone.setAttribute("preserveAspectRatio", "none");
+
+      const xml = new XMLSerializer().serializeToString(clone);
+      const svgBlob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
+      const svgUrl = URL.createObjectURL(svgBlob);
+
+      const img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = reject;
+        i.src = svgUrl;
       });
-      canvas.toBlob((blob) => {
-        if (!blob) return;
+
+      const scale = 2; // retina
+      const canvas = document.createElement("canvas");
+      canvas.width = EXPORT_W * scale;
+      canvas.height = EXPORT_H * scale;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(scale, scale);
+
+      // background
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, EXPORT_W, EXPORT_H);
+
+      // title block
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#0a0a0a";
+      ctx.font = "600 38px -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif";
+      ctx.fillText("Difficulty Growth by Epoch", 36, 30);
+
+      ctx.fillStyle = "#6b7280";
+      ctx.font = "400 17px -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif";
+      ctx.fillText("Bitcoin mining difficulty, converted to estimated hashes required per block.", 36, 78);
+
+      // chart
+      ctx.drawImage(img, 0, HEADER_H, EXPORT_W, CHART_H);
+      URL.revokeObjectURL(svgUrl);
+
+      // footer divider
+      ctx.fillStyle = "#f3f4f6";
+      ctx.fillRect(36, HEADER_H + CHART_H, EXPORT_W - 72, 1);
+
+      // X badge + handle (left)
+      const fy = HEADER_H + CHART_H + (FOOTER_H / 2);
+      ctx.fillStyle = "#000000";
+      ctx.beginPath();
+      ctx.arc(54, fy, 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 14px -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("𝕏", 54, fy + 1);
+
+      ctx.fillStyle = "#374151";
+      ctx.font = "600 16px -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText("@thebillyboone", 78, fy);
+
+      // source + date (right)
+      ctx.fillStyle = "#9ca3af";
+      ctx.font = "400 13px ui-monospace, Menlo, Monaco, monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      const stamp = "Source: " + (source || "—") + "  ·  " + new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+      ctx.fillText(stamp, EXPORT_W - 36, fy);
+
+      canvas.toBlob((b) => {
+        if (!b) { setExportingPng(false); return; }
         const a = document.createElement("a");
         a.download = "btc-difficulty-by-epoch-" + new Date().toISOString().slice(0,10) + ".png";
-        a.href = URL.createObjectURL(blob);
+        a.href = URL.createObjectURL(b);
         a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        setTimeout(() => URL.revokeObjectURL(a.href), 1500);
       }, "image/png");
     } catch (e) {
       alert("PNG export failed: " + e.message);
@@ -439,7 +533,7 @@ function App() {
               </div>
             )}
             {!loading && chartData.length > 0 && (
-              <svg width={W} height={H}
+              <svg ref={svgRef} width={W} height={H}
                 onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}
                 onTouchStart={onTouchMove} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
                 style={{display: "block", touchAction: "pan-y"}}>
