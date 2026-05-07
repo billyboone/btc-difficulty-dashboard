@@ -2,7 +2,7 @@
 
 Live dashboard plotting Bitcoin's network difficulty (converted to estimated hashes required per block) on a log scale, shaded by halving epoch.
 
-**Live:** https://thebillyboone.github.io/btc-difficulty-dashboard/
+**Live:** https://billyboone.github.io/btc-difficulty-dashboard/
 
 Built by [@thebillyboone](https://x.com/thebillyboone).
 
