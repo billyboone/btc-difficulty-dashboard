@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bitcoin Difficulty Growth by Epoch — @thebillyboone</title>
+<meta name="description" content="Bitcoin mining difficulty growth by halving epoch. Built by Billy Boone." />
+<meta property="og:title" content="Bitcoin Difficulty Growth by Epoch" />
+<meta property="og:description" content="Bitcoin mining difficulty, converted to estimated hashes required per block. By @thebillyboone." />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:creator" content="@thebillyboone" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+<style>
+  html, body { background: #ffffff; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Display", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    color: #0a0a0a;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+const BTC_ORANGE = "#F7931A";
+
+// difficulty × 2^32 = expected hashes per block, because Bitcoin's PoW target
+// representation normalizes "difficulty 1" to ~2^32 hashes.
+const TWO_TO_32 = Math.pow(2, 32);
+
+// Difficulty only adjusts every 2,016 blocks (~2 weeks), so per-adjustment
+// data is sufficient — daily samples would just repeat values between adjustments.
+const HALVING_EPOCHS = [
+  { id: 1, start: new Date("2009-01-03T00:00:00Z"), end: new Date("2012-11-28T00:00:00Z"),
+    fill: "rgba(120,120,120,0.10)", stroke: "rgba(120,120,120,0.30)",
+    text: "#4b5563", label: "2009–2012" },
+  { id: 2, start: new Date("2012-11-28T00:00:00Z"), end: new Date("2016-07-09T00:00:00Z"),
+    fill: "rgba(220,80,80,0.10)", stroke: "rgba(220,80,80,0.32)",
+    text: "#b91c1c", label: "2012–2016" },
+  { id: 3, start: new Date("2016-07-09T00:00:00Z"), end: new Date("2020-05-11T00:00:00Z"),
+    fill: "rgba(80,130,220,0.10)", stroke: "rgba(80,130,220,0.32)",
+    text: "#1d4ed8", label: "2016–2020" },
+  { id: 4, start: new Date("2020-05-11T00:00:00Z"), end: new Date("2024-04-20T00:00:00Z"),
+    fill: "rgba(225,180,60,0.14)", stroke: "rgba(200,140,30,0.32)",
+    text: "#b45309", label: "2020–2024" },
+  { id: 5, start: new Date("2024-04-20T00:00:00Z"), end: new Date("2028-04-20T00:00:00Z"),
+    fill: "rgba(170,110,225,0.12)", stroke: "rgba(170,110,225,0.32)",
+    text: "#7e22ce", label: "2024–2028" }
+];
+
+// Epoch 1 (pre-ASIC era) is hidden on the chart but kept in the summary cards.
+const CHART_START = HALVING_EPOCHS[1].start;
+
+function formatSI(n) {
+  if (!isFinite(n) || n <= 0) return "0";
+  const a = Math.abs(n);
+  if (a >= 1e24) return (n / 1e24).toFixed(2) + " Y";
+  if (a >= 1e21) return (n / 1e21).toFixed(2) + " Z";
+  if (a >= 1e18) return (n / 1e18).toFixed(2) + " E";
+  if (a >= 1e15) return (n / 1e15).toFixed(2) + " P";
+  if (a >= 1e12) return (n / 1e12).toFixed(2) + " T";
+  if (a >= 1e9)  return (n / 1e9).toFixed(2) + " G";
+  if (a >= 1e6)  return (n / 1e6).toFixed(2) + " M";
+  if (a >= 1e3)  return (n / 1e3).toFixed(2) + " K";
+  return n.toFixed(2);
+}
+function formatPct(p) {
+  if (!isFinite(p)) return "—";
+  const sign = p > 0 ? "+" : "";
+  if (Math.abs(p) >= 1000) return sign + Math.round(p).toLocaleString() + "%";
+  if (Math.abs(p) >= 10)   return sign + p.toFixed(1) + "%";
+  return sign + p.toFixed(2) + "%";
+}
+function formatDate(d) {
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+// Mempool returns either tuples [ts, height, difficulty, ...] or objects.
+// Infer the shape, normalize, and dedupe consecutive identical values.
+function normalizeMempool(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const out = [];
+  for (const row of raw) {
+    let ts = null, diff = null;
+    if (Array.isArray(row)) { ts = row[0]; diff = row[2]; }
+    else if (row && typeof row === "object") {
+      ts = row.timestamp ?? row.time ?? row.startTime ?? row.t ?? row.blockTimestamp;
+      diff = row.difficulty ?? row.diff ?? row.value;
+    }
+    if (ts == null || diff == null) continue;
+    const ms = Number(ts) > 1e12 ? Number(ts) : Number(ts) * 1000;
+    const date = new Date(ms);
+    const difficulty = Number(diff);
+    if (!isFinite(difficulty) || difficulty <= 0 || isNaN(date.getTime())) continue;
+    out.push({ date, difficulty, hashesRequired: difficulty * TWO_TO_32 });
+  }
+  out.sort((a, b) => a.date - b.date);
+  return dedupeSeries(out);
+}
+function normalizeBlockchainInfo(raw) {
+  if (!raw || !Array.isArray(raw.values)) return [];
+  return dedupeSeries(raw.values
+    .filter(v => isFinite(v.y) && v.y > 0)
+    .map(v => ({ date: new Date(v.x * 1000), difficulty: v.y, hashesRequired: v.y * TWO_TO_32 }))
+    .sort((a, b) => a.date - b.date));
+}
+function dedupeSeries(arr) {
+  if (arr.length <= 1) return arr;
+  const out = [arr[0]];
+  for (let i = 1; i < arr.length; i++) {
+    if (arr[i].difficulty !== out[out.length - 1].difficulty) out.push(arr[i]);
+  }
+  if (arr[arr.length - 1] !== out[out.length - 1]) out.push(arr[arr.length - 1]);
+  return out;
+}
+
+// Per epoch: ((endValue / startValue) - 1) * 100
+// startValue = first data point on/after epoch.start
+// endValue   = last data point on/before epoch.end (or latest for the live epoch)
+function computeEpochStats(data, now = new Date()) {
+  if (!data.length) return [];
+  return HALVING_EPOCHS.map(epoch => {
+    const inEpoch = data.filter(d => d.date >= epoch.start && d.date < epoch.end);
+    const isCurrent = now >= epoch.start && now < epoch.end;
+    if (inEpoch.length < 2) {
+      return { ...epoch, hasData: inEpoch.length > 0, isCurrent, points: inEpoch, pct: null };
+    }
+    const startValue = inEpoch[0].hashesRequired;
+    const endValue = inEpoch[inEpoch.length - 1].hashesRequired;
+    return { ...epoch, hasData: true, isCurrent, points: inEpoch,
+      pct: ((endValue / startValue) - 1) * 100, startValue, endValue };
+  });
+}
+
+async function fetchMempool1m() {
+  const r = await fetch("https://mempool.space/api/v1/mining/difficulty-adjustments/1m", { cache: "no-store" });
+  if (!r.ok) throw new Error("mempool/1m " + r.status);
+  return normalizeMempool(await r.json());
+}
+async function fetchMempoolAll() {
+  const r = await fetch("https://mempool.space/api/v1/mining/difficulty-adjustments/all", { cache: "no-store" });
+  if (!r.ok) throw new Error("mempool/all " + r.status);
+  return normalizeMempool(await r.json());
+}
+async function fetchBlockchainInfo() {
+  const r = await fetch("https://api.blockchain.info/charts/difficulty?timespan=all&format=json&sampled=false", { cache: "no-store" });
+  if (!r.ok) throw new Error("blockchain.info " + r.status);
+  return normalizeBlockchainInfo(await r.json());
+}
+
+function App() {
+  const [data, setData] = useState([]);
+  const [source, setSource] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showRaw, setShowRaw] = useState(false);
+  const [showLabels, setShowLabels] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [pasteMode, setPasteMode] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const [hover, setHover] = useState(null);
+  const [exportingPng, setExportingPng] = useState(false);
+  const containerRef = useRef(null);
+  const cardRef = useRef(null);
+  const [size, setSize] = useState({ w: 1100, h: 560 });
+
+  const loadData = useCallback(async () => {
+    setLoading(true); setError(null); setHover(null);
+    let lastErr = null;
+    try {
+      const m1 = await fetchMempool1m();
+      const span = m1.length > 1 ? (m1[m1.length-1].date - m1[0].date) / (365.25*24*3600*1000) : 0;
+      if (span >= 5 && m1.length >= 20) {
+        setData(m1); setSource("mempool.space"); setLastUpdated(new Date()); setLoading(false); return;
+      }
+    } catch (e) { lastErr = e; }
+    try {
+      const mAll = await fetchMempoolAll();
+      const span = mAll.length > 1 ? (mAll[mAll.length-1].date - mAll[0].date) / (365.25*24*3600*1000) : 0;
+      if (span >= 5 && mAll.length >= 20) {
+        setData(mAll); setSource("mempool.space"); setLastUpdated(new Date()); setLoading(false); return;
+      }
+    } catch (e) { lastErr = e; }
+    try {
+      const bci = await fetchBlockchainInfo();
+      if (bci.length === 0) throw new Error("empty");
+      setData(bci); setSource("Blockchain.com fallback"); setLastUpdated(new Date()); setLoading(false); return;
+    } catch (e) { lastErr = e; }
+    setError("Both data sources failed" + (lastErr ? " (" + lastErr.message + ")" : "") + ". Paste JSON below to render manually.");
+    setPasteMode(true); setLoading(false);
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    // ResizeObserver catches layout settling (Tailwind CDN hydrating, fonts
+    // loading, etc.) that the initial measurement misses, so the chart picks
+    // up the real container width on first paint instead of waiting for a
+    // manual window resize.
+    const measure = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const w = el.clientWidth;
+      if (!w) return;
+      let h;
+      if (w < 640)      h = Math.max(320, Math.round(w * 0.85));
+      else if (w < 900) h = Math.round(w * 0.6);
+      else              h = Math.max(440, Math.min(640, Math.round(w * 0.5)));
+      setSize(prev => (prev.w === w && prev.h === h) ? prev : { w, h });
+    };
+    measure();
+    let ro = null;
+    if (containerRef.current && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(measure);
+      ro.observe(containerRef.current);
+    }
+    window.addEventListener("resize", measure);
+    // Two RAFs catch the case where Tailwind's stylesheet hasn't applied yet
+    // when the effect first runs.
+    requestAnimationFrame(() => requestAnimationFrame(measure));
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+
+  const epochStats = useMemo(() => computeEpochStats(data), [data]);
+
+  // Chart-only data: drop the pre-ASIC era so Epochs 2–5 get the full canvas.
+  const chartData = useMemo(() => data.filter(d => d.date >= CHART_START), [data]);
+
+  const tryPaste = () => {
+    try {
+      const parsed = JSON.parse(pasted);
+      let normalized = [];
+      if (Array.isArray(parsed)) normalized = normalizeMempool(parsed);
+      else if (parsed && parsed.values) normalized = normalizeBlockchainInfo(parsed);
+      if (!normalized.length) throw new Error("no data parsed");
+      setData(normalized); setSource("Pasted JSON");
+      setLastUpdated(new Date()); setError(null); setPasteMode(false);
+    } catch (e) { setError("Could not parse pasted JSON: " + e.message); }
+  };
+
+  const yKey = showRaw ? "difficulty" : "hashesRequired";
+  const yLabel = showRaw ? "Raw difficulty" : "Hashes / block";
+  const isMobile = size.w < 640;
+
+  const margin = {
+    top: isMobile ? 28 : 40,
+    right: isMobile ? 14 : 28,
+    bottom: 40,
+    left: isMobile ? 56 : 84
+  };
+  const W = size.w, H = size.h;
+  const innerW = W - margin.left - margin.right;
+  const innerH = H - margin.top - margin.bottom;
+
+  const xDomain = useMemo(() => {
+    if (chartData.length === 0) return [CHART_START, new Date()];
+    return [chartData[0].date, chartData[chartData.length - 1].date];
+  }, [chartData]);
+
+  const yDomain = useMemo(() => {
+    if (chartData.length === 0) return [1, 1e20];
+    let min = Infinity, max = -Infinity;
+    for (const d of chartData) { if (d[yKey] < min) min = d[yKey]; if (d[yKey] > max) max = d[yKey]; }
+    if (!isFinite(min) || min <= 0) min = 1;
+    return [min * 0.5, max * 2];
+  }, [chartData, yKey]);
+
+  const xScale = (d) => margin.left + ((d - xDomain[0]) / (xDomain[1] - xDomain[0])) * innerW;
+  const logMin = Math.log10(yDomain[0]);
+  const logMax = Math.log10(yDomain[1]);
+  const yScale = (v) => margin.top + (1 - (Math.log10(v) - logMin) / (logMax - logMin)) * innerH;
+
+  const yTicks = useMemo(() => {
+    const ticks = [];
+    const lo = Math.floor(logMin), hi = Math.ceil(logMax);
+    const step = isMobile ? 2 : (hi - lo > 10 ? 2 : 1);
+    for (let i = lo; i <= hi; i += step) ticks.push(Math.pow(10, i));
+    return ticks;
+  }, [logMin, logMax, isMobile]);
+
+  const xTicks = useMemo(() => {
+    if (chartData.length === 0) return [];
+    const startY = xDomain[0].getFullYear();
+    const endY = xDomain[1].getFullYear();
+    const target = innerW < 420 ? 4 : innerW < 700 ? 6 : 8;
+    const yearSpan = Math.max(1, endY - startY);
+    const step = Math.max(1, Math.ceil(yearSpan / target));
+    const ticks = [];
+    for (let y = startY; y <= endY; y += step) ticks.push(new Date(y, 0, 1));
+    return ticks;
+  }, [xDomain, chartData.length, innerW]);
+
+  // Step-after path: hold horizontal until the next adjustment, then step
+  // vertically. Preserves the genuine 2-week step character of the data.
+  const linePath = useMemo(() => {
+    if (chartData.length === 0) return "";
+    let p = "";
+    chartData.forEach((d, i) => {
+      const x = xScale(d.date), y = yScale(d[yKey]);
+      if (i === 0) p += "M" + x.toFixed(1) + "," + y.toFixed(1);
+      else p += " H" + x.toFixed(1) + " V" + y.toFixed(1);
+    });
+    return p;
+  }, [chartData, yKey, size, yDomain, xDomain]);
+
+  const moveHover = (clientX, currentTarget) => {
+    if (chartData.length === 0) return;
+    const rect = currentTarget.getBoundingClientRect();
+    const x = clientX - rect.left;
+    if (x < margin.left || x > W - margin.right) { setHover(null); return; }
+    const t = xDomain[0].getTime() + ((x - margin.left) / innerW) * (xDomain[1] - xDomain[0]);
+    let lo = 0, hi = chartData.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (chartData[mid].date.getTime() < t) lo = mid + 1; else hi = mid;
+    }
+    let idx = lo;
+    if (idx > 0 && Math.abs(chartData[idx-1].date - t) < Math.abs(chartData[idx].date - t)) idx -= 1;
+    const point = chartData[idx];
+    const epoch = HALVING_EPOCHS.find(ep => point.date >= ep.start && point.date < ep.end);
+    let pctFromEpochStart = null;
+    if (epoch) {
+      const stats = epochStats.find(s => s.id === epoch.id);
+      if (stats && stats.points && stats.points.length) {
+        pctFromEpochStart = ((point[yKey] / stats.points[0][yKey]) - 1) * 100;
+      }
+    }
+    setHover({ point, epoch, pctFromEpochStart });
+  };
+  const onMouseMove  = (e) => moveHover(e.clientX, e.currentTarget);
+  const onMouseLeave = () => setHover(null);
+  const onTouchMove  = (e) => { if (e.touches[0]) moveHover(e.touches[0].clientX, e.currentTarget); };
+  const onTouchEnd   = () => setHover(null);
+
+  const downloadPNG = async () => {
+    if (!cardRef.current || !window.html2canvas || exportingPng) return;
+    setExportingPng(true);
+    try {
+      const canvas = await window.html2canvas(cardRef.current, {
+        backgroundColor: "#ffffff", scale: 2, logging: false, useCORS: true
+      });
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const a = document.createElement("a");
+        a.download = "btc-difficulty-by-epoch-" + new Date().toISOString().slice(0,10) + ".png";
+        a.href = URL.createObjectURL(blob);
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      }, "image/png");
+    } catch (e) {
+      alert("PNG export failed: " + e.message);
+    } finally {
+      setExportingPng(false);
+    }
+  };
+
+  const shareOnX = () => {
+    const epoch5 = epochStats.find(e => e.id === 5);
+    const epoch4 = epochStats.find(e => e.id === 4);
+    const text =
+      "Bitcoin difficulty growth by halving epoch:\n\n" +
+      (epoch4 && epoch4.pct != null ? "Epoch 4 (2020–2024): " + formatPct(epoch4.pct) + "\n" : "") +
+      (epoch5 && epoch5.pct != null ? "Epoch 5 (live): " + formatPct(epoch5.pct) + "\n\n" : "\n") +
+      "The network gets exponentially harder to attack every cycle.";
+    window.open("https://twitter.com/intent/tweet?text=" + encodeURIComponent(text), "_blank");
+  };
+
+  return (
+    <div className="min-h-screen w-full px-3 py-6 sm:px-6 sm:py-8 md:px-8">
+      <div className="max-w-7xl mx-auto">
+        <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-5">
+          <div>
+            <h1 className="text-neutral-900 text-2xl sm:text-3xl md:text-[34px] font-semibold tracking-tight leading-tight">
+              Difficulty Growth by Epoch
+            </h1>
+            <p className="text-neutral-500 text-sm md:text-base mt-1.5 max-w-2xl">
+              Bitcoin mining difficulty, converted to estimated hashes required per block.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={loadData} disabled={loading}
+              className="px-3 py-1.5 text-xs rounded-md bg-white hover:bg-neutral-50 disabled:opacity-50 text-neutral-700 border border-neutral-200 shadow-sm transition flex items-center gap-1.5">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={loading ? "animate-spin" : ""}>
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>
+              </svg>
+              Refresh
+            </button>
+            <button onClick={() => setShowRaw(s => !s)}
+              className={"px-3 py-1.5 text-xs rounded-md border shadow-sm transition " +
+                (showRaw ? "bg-neutral-900 text-white border-neutral-900" : "bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-50")}>
+              {showRaw ? "Raw difficulty" : "Hashes required"}
+            </button>
+            <button onClick={() => setShowLabels(s => !s)}
+              className={"px-3 py-1.5 text-xs rounded-md border shadow-sm transition " +
+                (showLabels ? "bg-neutral-900 text-white border-neutral-900" : "bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-50")}>
+              {showLabels ? "Labels: on" : "Labels: off"}
+            </button>
+          </div>
+        </header>
+
+        <div ref={cardRef} className="rounded-2xl bg-white border border-neutral-200 shadow-[0_2px_24px_-12px_rgba(0,0,0,0.18)] overflow-hidden">
+          <div className="px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-100 bg-neutral-50/60">
+            <div className="flex items-center gap-2 text-xs text-neutral-600">
+              <span className={"inline-block w-1.5 h-1.5 rounded-full " + (
+                source.includes("mempool") ? "bg-emerald-500" :
+                source.includes("Blockchain") ? "bg-amber-500" :
+                source === "Pasted JSON" ? "bg-sky-500" : "bg-neutral-400")}></span>
+              <span>Source: <span className="text-neutral-900 font-medium">{source || (loading ? "loading…" : "—")}</span></span>
+            </div>
+            <div className="text-xs text-neutral-500 font-mono">
+              {data.length > 0 && <span className="mr-3 text-neutral-400">{data.length.toLocaleString()} adjustments</span>}
+              {lastUpdated ? "Updated " + lastUpdated.toLocaleTimeString() : ""}
+            </div>
+          </div>
+
+          <div ref={containerRef} className="relative w-full">
+            {loading && (
+              <div className="flex items-center justify-center" style={{height: H}}>
+                <div className="text-neutral-500 text-sm flex items-center gap-2">
+                  <span className="inline-block w-3 h-3 rounded-full border-2 border-neutral-200 border-t-orange-500 animate-spin"></span>
+                  Fetching difficulty history…
+                </div>
+              </div>
+            )}
+            {!loading && error && !chartData.length && !pasteMode && (
+              <div className="flex flex-col items-center justify-center gap-3 px-6" style={{height: H * 0.6}}>
+                <div className="text-red-500 text-sm">{error}</div>
+              </div>
+            )}
+            {!loading && chartData.length > 0 && (
+              <svg width={W} height={H}
+                onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}
+                onTouchStart={onTouchMove} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+                style={{display: "block", touchAction: "pan-y"}}>
+                <defs>
+                  <linearGradient id="lineGradient" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor={BTC_ORANGE} stopOpacity="1"/>
+                    <stop offset="100%" stopColor={BTC_ORANGE} stopOpacity="0.85"/>
+                  </linearGradient>
+                  <linearGradient id="lineFill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor={BTC_ORANGE} stopOpacity="0.18"/>
+                    <stop offset="100%" stopColor={BTC_ORANGE} stopOpacity="0"/>
+                  </linearGradient>
+                </defs>
+
+                {/* epoch shading (skip Epoch 1 since we cropped the chart) */}
+                {epochStats.filter(ep => ep.id !== 1).map(ep => {
+                  if (!ep.hasData) return null;
+                  const x1 = Math.max(margin.left, xScale(ep.start));
+                  const epEnd = ep.isCurrent ? xDomain[1] : ep.end;
+                  const x2 = Math.min(W - margin.right, xScale(epEnd));
+                  if (x2 <= x1) return null;
+                  return (
+                    <g key={"shade-" + ep.id}>
+                      <rect x={x1} y={margin.top} width={x2 - x1} height={innerH} fill={ep.fill}/>
+                      <line x1={x2} x2={x2} y1={margin.top} y2={margin.top + innerH}
+                        stroke={ep.stroke} strokeDasharray="3 4" strokeWidth="1"/>
+                    </g>
+                  );
+                })}
+
+                {/* gridlines & y-axis labels */}
+                {yTicks.map((t, i) => (
+                  <g key={"ygrid-" + i}>
+                    <line x1={margin.left} x2={W - margin.right} y1={yScale(t)} y2={yScale(t)}
+                      stroke="rgba(0,0,0,0.05)" strokeWidth="1"/>
+                    <text x={margin.left - 8} y={yScale(t) + 3} textAnchor="end"
+                      fontSize={isMobile ? "9.5" : "10.5"} fill="#6b7280" fontFamily="ui-monospace, monospace">
+                      {formatSI(t)}
+                    </text>
+                  </g>
+                ))}
+                {xTicks.map((t, i) => {
+                  const x = xScale(t);
+                  if (x < margin.left - 1 || x > W - margin.right + 1) return null;
+                  return (
+                    <g key={"xgrid-" + i}>
+                      <line x1={x} x2={x} y1={margin.top} y2={margin.top + innerH}
+                        stroke="rgba(0,0,0,0.04)"/>
+                      <text x={x} y={margin.top + innerH + 16} textAnchor="middle"
+                        fontSize={isMobile ? "9.5" : "10.5"} fill="#6b7280" fontFamily="ui-monospace, monospace">
+                        {t.getFullYear()}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                <line x1={margin.left} x2={margin.left} y1={margin.top} y2={margin.top + innerH}
+                  stroke="rgba(0,0,0,0.18)"/>
+                <line x1={margin.left} x2={W - margin.right} y1={margin.top + innerH} y2={margin.top + innerH}
+                  stroke="rgba(0,0,0,0.18)"/>
+
+                {!isMobile && (
+                  <text x={20} y={margin.top + innerH/2}
+                    transform={"rotate(-90, 20, " + (margin.top + innerH/2) + ")"}
+                    textAnchor="middle" fontSize="10" fill="#9ca3af"
+                    fontFamily="ui-monospace, monospace" letterSpacing="2">
+                    {yLabel.toUpperCase()}
+                  </text>
+                )}
+
+                {/* fill under the line */}
+                {chartData.length > 1 && (
+                  <path d={linePath + " L " + xScale(chartData[chartData.length-1].date).toFixed(1) + "," + (margin.top + innerH).toFixed(1) +
+                          " L " + xScale(chartData[0].date).toFixed(1) + "," + (margin.top + innerH).toFixed(1) + " Z"}
+                    fill="url(#lineFill)"/>
+                )}
+                <path d={linePath} fill="none" stroke="url(#lineGradient)" strokeWidth={isMobile ? "1.5" : "1.8"}
+                  strokeLinejoin="round" strokeLinecap="round"/>
+
+                {/* epoch percentage labels — clean two-line style:
+                    bold percentage in epoch tint, single muted meta line below. */}
+                {showLabels && epochStats.filter(ep => ep.id !== 1).map(ep => {
+                  if (!ep.hasData || ep.pct == null) return null;
+                  const x1 = Math.max(margin.left, xScale(ep.start));
+                  const epEnd = ep.isCurrent ? xDomain[1] : ep.end;
+                  const x2 = Math.min(W - margin.right, xScale(epEnd));
+                  const w = x2 - x1;
+                  if (w < 32) return null;
+                  const cx = (x1 + x2) / 2;
+                  const cy = margin.top + (isMobile ? 16 : 24);
+                  const big = isMobile
+                    ? (w > 140 ? 17 : w > 80 ? 13 : 11)
+                    : (w > 240 ? 22 : w > 160 ? 19 : w > 90 ? 15 : 12);
+                  const meta = isMobile ? (w > 140 ? 10 : 9) : (w > 160 ? 11 : 10);
+                  const metaText = w > 90
+                    ? "Epoch " + ep.id + " · " + ep.label
+                    : "E" + ep.id;
+                  return (
+                    <g key={"label-" + ep.id} pointerEvents="none">
+                      <text x={cx} y={cy} textAnchor="middle" fontSize={big}
+                        fontWeight="700" fill={ep.text}
+                        style={{letterSpacing: "-0.025em"}}>
+                        {formatPct(ep.pct)}
+                      </text>
+                      <text x={cx} y={cy + big * 0.95 + 4} textAnchor="middle" fontSize={meta}
+                        fontWeight="500" fill="#6b7280" fontFamily="ui-monospace, monospace"
+                        style={{letterSpacing: "0.04em"}}>
+                        {metaText}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {hover && (
+                  <g pointerEvents="none">
+                    <line x1={xScale(hover.point.date)} x2={xScale(hover.point.date)}
+                      y1={margin.top} y2={margin.top + innerH}
+                      stroke="rgba(247,147,26,0.65)" strokeWidth="1" strokeDasharray="2 3"/>
+                    <circle cx={xScale(hover.point.date)} cy={yScale(hover.point[yKey])}
+                      r="4.5" fill={BTC_ORANGE} stroke="#ffffff" strokeWidth="2"/>
+                  </g>
+                )}
+              </svg>
+            )}
+
+            {hover && (
+              <div className="absolute pointer-events-none rounded-lg bg-white border border-neutral-200 shadow-xl px-3 py-2 text-xs text-neutral-800 min-w-[200px]"
+                style={{
+                  left: Math.min(Math.max(8, xScale(hover.point.date) + 14), Math.max(8, W - 220)),
+                  top:  Math.max(margin.top + 8, Math.min(yScale(hover.point[yKey]) - 90, H - 140))
+                }}>
+                <div className="text-neutral-500 text-[10px] uppercase tracking-wider mb-1.5 font-mono">
+                  {formatDate(hover.point.date)}
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-neutral-500">Difficulty</span>
+                  <span className="text-neutral-900 font-mono">{formatSI(hover.point.difficulty)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-neutral-500">Hashes/block</span>
+                  <span className="text-neutral-900 font-mono">{formatSI(hover.point.hashesRequired)}</span>
+                </div>
+                {hover.epoch && (
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-neutral-500">Epoch</span>
+                    <span className="font-mono font-medium" style={{color: hover.epoch.text}}>
+                      {hover.epoch.id} · {hover.epoch.label}
+                    </span>
+                  </div>
+                )}
+                {hover.pctFromEpochStart != null && (
+                  <div className="flex items-center justify-between gap-4 pt-1.5 mt-1.5 border-t border-neutral-100">
+                    <span className="text-neutral-500">From epoch start</span>
+                    <span className="font-mono font-semibold" style={{color: BTC_ORANGE}}>
+                      {formatPct(hover.pctFromEpochStart)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* credit + share row, sits just below the chart so it never overlaps the axis */}
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-5 py-3 border-t border-neutral-100 bg-neutral-50/40">
+            <a href="https://x.com/thebillyboone" target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 text-xs text-neutral-600 hover:text-neutral-900 transition group">
+              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-black text-white">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                </svg>
+              </span>
+              <span className="font-medium">@thebillyboone</span>
+            </a>
+            <div className="flex items-center gap-2" data-html2canvas-ignore="true">
+              <button onClick={shareOnX}
+                className="px-3 py-1.5 text-xs rounded-md bg-white hover:bg-neutral-50 text-neutral-700 border border-neutral-200 shadow-sm transition flex items-center gap-1.5">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                Post on X
+              </button>
+              <button onClick={downloadPNG} disabled={exportingPng || loading}
+                className="px-3 py-1.5 text-xs rounded-md bg-orange-500 hover:bg-orange-400 disabled:opacity-50 text-white font-semibold border border-orange-500 shadow-sm transition flex items-center gap-1.5">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                {exportingPng ? "Exporting…" : "Download PNG"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {data.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mt-4">
+            {epochStats.filter(ep => ep.hasData).map(ep => (
+              <div key={"card-" + ep.id} className="rounded-xl bg-white px-3 sm:px-4 py-2.5 sm:py-3 border shadow-sm"
+                style={{borderColor: ep.stroke}}>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] uppercase tracking-[0.2em] font-mono font-semibold" style={{color: ep.text}}>
+                    Epoch {ep.id}
+                  </div>
+                  {ep.isCurrent && (
+                    <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full border border-orange-300 text-orange-600 font-mono bg-orange-50">live</span>
+                  )}
+                </div>
+                <div className="text-neutral-900 text-lg sm:text-xl md:text-2xl font-semibold mt-1.5" style={{letterSpacing: "-0.02em"}}>
+                  {ep.pct != null ? formatPct(ep.pct) : "—"}
+                </div>
+                <div className="text-neutral-500 text-[11px] mt-0.5 font-mono">{ep.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {pasteMode && (
+          <div className="mt-6 rounded-2xl bg-white border border-neutral-200 p-5 shadow-sm">
+            <div className="text-neutral-900 text-sm font-medium mb-1">Manual JSON paste</div>
+            <div className="text-neutral-500 text-xs mb-3">
+              Paste a mempool.space difficulty-adjustments array or a Blockchain.com{" "}
+              <code className="text-neutral-700 bg-neutral-100 px-1 rounded">{`{"values":[{"x":...,"y":...}]}`}</code> object.
+            </div>
+            <textarea value={pasted} onChange={e => setPasted(e.target.value)}
+              placeholder="Paste JSON here…"
+              className="w-full h-40 bg-neutral-50 border border-neutral-200 rounded-md p-3 text-xs text-neutral-800 font-mono focus:outline-none focus:border-orange-400"/>
+            <div className="flex items-center gap-2 mt-3">
+              <button onClick={tryPaste}
+                className="px-3 py-1.5 text-xs rounded-md bg-orange-500 hover:bg-orange-400 text-white font-semibold transition">
+                Render from JSON
+              </button>
+              <button onClick={() => { setPasteMode(false); loadData(); }}
+                className="px-3 py-1.5 text-xs rounded-md bg-white hover:bg-neutral-50 text-neutral-700 border border-neutral-200 transition">
+                Retry network
+              </button>
+              {error && <span className="text-red-500 text-xs ml-2">{error}</span>}
+            </div>
+          </div>
+        )}
+
+        <footer className="text-[11px] text-neutral-500 mt-6 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono">
+          <span>hashesRequired = difficulty × 2³²</span>
+          <span>· Difficulty adjusts every 2,016 blocks</span>
+          <span>· Y-axis: log₁₀</span>
+          <span>· Sources: mempool.space → Blockchain.com</span>
+          <span className="ml-auto">
+            Built by{" "}
+            <a href="https://x.com/thebillyboone" target="_blank" rel="noopener noreferrer"
+              className="text-neutral-700 hover:text-black underline underline-offset-2">
+              @thebillyboone
+            </a>
+          </span>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
